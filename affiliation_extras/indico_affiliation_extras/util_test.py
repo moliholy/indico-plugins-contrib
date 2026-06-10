@@ -268,6 +268,27 @@ def test_resolve_affiliations_includes_tag_groups(db):
     assert [affiliation.name for affiliation in resolved] == ['Group Only', 'Tag Only']
 
 
+def test_resolve_affiliations_uses_constant_number_of_queries(db, count_queries):
+    group_ids, tag_ids = [], []
+    for i in range(4):
+        group = _create_group(db, f'Group {i}', f'g{i}')
+        group.affiliations.add(_create_affiliation(db, f'GAff {i}'))
+        group_ids.append(group.id)
+        tag = _create_tag(db, f'Tag {i}', f't{i}')
+        tag.affiliations.add(_create_affiliation(db, f'TAff {i}'))
+        tag_ids.append(tag.id)
+    db.session.flush()
+    db.session.expire_all()
+    groups = set(AffiliationGroup.query.filter(AffiliationGroup.id.in_(group_ids)))
+    tags = set(AffiliationTag.query.filter(AffiliationTag.id.in_(tag_ids)))
+
+    with count_queries() as count:
+        util.resolve_affiliations(groups, tags, set())
+
+    # constant regardless of how many groups/tags are passed (no per-object lazy loads)
+    assert count() <= 6
+
+
 def test_populate_contacts_adds_new_contact_and_logs_summary(db):
     affiliation = _create_affiliation(db, 'CERN')
 

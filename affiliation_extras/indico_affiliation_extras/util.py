@@ -15,6 +15,7 @@ from uuid import UUID
 from flask import current_app, session
 from itsdangerous import BadSignature
 from lxml import html
+from sqlalchemy.orm import selectinload
 from werkzeug.exceptions import HTTPException
 
 from indico.core.config import config
@@ -335,11 +336,25 @@ def resolve_affiliations(
 ) -> list[Affiliation]:
     all_affiliations = set(affiliations)
     all_groups = set(groups)
-    for tag in tags:
-        all_affiliations.update(tag.affiliations)
-        all_groups.update(tag.groups)
-    for group in all_groups:
-        all_affiliations.update(group.affiliations)
+    if tags:
+        tags = (
+            AffiliationTag.query
+            .filter(AffiliationTag.id.in_(tag.id for tag in tags))
+            .options(selectinload(AffiliationTag.affiliations), selectinload(AffiliationTag.groups))
+            .all()
+        )
+        for tag in tags:
+            all_affiliations.update(tag.affiliations)
+            all_groups.update(tag.groups)
+    if all_groups:
+        groups = (
+            AffiliationGroup.query
+            .filter(AffiliationGroup.id.in_(group.id for group in all_groups))
+            .options(selectinload(AffiliationGroup.affiliations))
+            .all()
+        )
+        for group in groups:
+            all_affiliations.update(group.affiliations)
     return sorted(all_affiliations, key=lambda affiliation: affiliation.name.lower())
 
 
@@ -443,16 +458,6 @@ def get_default_catalog(target: Category | Event, *, only_inherited: bool = Fals
     if isinstance(target, Category):
         return _get_default_catalog_on_category(target, only_inherited=only_inherited)
     raise TypeError(f'Unsupported target type: {type(target).__name__}')
-
-
-def get_explicit_default_catalog_on_category(category):
-    """Return the catalog explicitly set as default on a category, if any."""
-    return get_explicit_default_catalog(category)
-
-
-def get_default_catalog_on_category(category, *, only_inherited: bool = False):
-    """Return the effective default catalog for a category."""
-    return get_default_catalog(category, only_inherited=only_inherited)
 
 
 def get_representation_affiliation_lists(event: Event, *, enabled_only: bool = True) -> list[AffiliationList]:
