@@ -216,7 +216,9 @@ class RHInviteByAffiliation(RHAdminBase):
         tag_objs = set(AffiliationTag.query.filter(AffiliationTag.id.in_(tag_ids))) if tag_ids else set()
         aff_objs = set(Affiliation.query.filter(Affiliation.id.in_(aff_ids))) if aff_ids else set()
         all_affiliations = resolve_affiliations(group_objs, tag_objs, aff_objs)
-        users_by_id = {u.id: u for aff in all_affiliations for u in aff.user_affiliations.all()}
+        users_by_id = {
+            user.id: user for user in User.query.filter(User.affiliation_id.in_(a.id for a in all_affiliations))
+        }
 
         invited = {inv.email.lower() for inv in self.regform.invitations}
         registered = {r.email.lower() for r in self.regform.registrations if r.is_active and r.email}
