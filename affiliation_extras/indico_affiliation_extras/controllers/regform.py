@@ -453,6 +453,7 @@ class RHAffiliationCatalogInviteMetadata(RHManageRegFormBase):
             focal_point_count=len(get_event_catalog_focal_points(self.event, affiliation_ids)),
             affiliation_count=len(affiliation_ids),
             contact_list_options=[name for name in contact_list_names if name],
+            has_affiliation_catalog=get_default_catalog(self.event) is not None,
             has_unnamed_contact_lists='' in contact_list_names,
         )
 

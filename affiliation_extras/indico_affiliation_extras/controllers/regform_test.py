@@ -373,7 +373,28 @@ class TestInvitations:
             'affiliation_count': 1,
             'contact_list_options': ['Operations'],
             'focal_point_count': 1,
+            'has_affiliation_catalog': True,
             'has_unnamed_contact_lists': True,
+        }
+
+    def test_affiliation_catalog_invite_metadata_without_catalog(
+        self,
+        test_client,
+        dummy_regform,
+        dummy_user,
+    ):
+        dummy_regform.event.update_principal(dummy_user, full_access=True)
+        _login(test_client, dummy_user)
+
+        resp = test_client.get(_metadata_url(dummy_regform))
+
+        assert resp.status_code == 200
+        assert resp.json == {
+            'affiliation_count': 0,
+            'contact_list_options': [],
+            'focal_point_count': 0,
+            'has_affiliation_catalog': False,
+            'has_unnamed_contact_lists': False,
         }
 
     @pytest.mark.usefixtures('no_csrf_check')

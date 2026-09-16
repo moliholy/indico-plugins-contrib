@@ -37,6 +37,7 @@ interface AffiliationCatalogMetadata {
   affiliationCount: number;
   focalPointCount: number;
   contactListOptions: string[];
+  hasAffiliationCatalog: boolean;
   hasUnnamedContactLists: boolean;
 }
 
@@ -183,7 +184,17 @@ const AffiliationCatalogFields = ({eventId, regformId}: AffiliationCatalogFields
 
   return (
     <>
-      {data.affiliationCount ? (
+      {!data.hasAffiliationCatalog ? (
+        <Message error visible icon>
+          <Icon name="warning sign" />
+          <Message.Content>
+            <Translate as={Message.Header}>No affiliation catalog selected</Translate>
+            <Translate as="p">
+              Select an affiliation catalog for this event before sending invitations.
+            </Translate>
+          </Message.Content>
+        </Message>
+      ) : data.affiliationCount ? (
         <Message info icon>
           <Icon name="building outline" />
           <Message.Content>
@@ -204,11 +215,13 @@ const AffiliationCatalogFields = ({eventId, regformId}: AffiliationCatalogFields
           </Message.Content>
         </Message>
       ) : (
-        <Message error icon>
+        <Message error visible icon>
           <Icon name="warning sign" />
           <Message.Content>
             <Translate as={Message.Header}>No affiliations found</Translate>
-            <Translate as="p">No affiliations were found in this event catalog.</Translate>
+            <Translate as="p">
+              No affiliations were found on the selected catalog for this event.
+            </Translate>
           </Message.Content>
         </Message>
       )}
@@ -222,7 +235,7 @@ const AffiliationCatalogFields = ({eventId, regformId}: AffiliationCatalogFields
         fluid
         required
       />
-      {!recipientSourceOptions.length && (
+      {data.affiliationCount > 0 && !recipientSourceOptions.length && (
         <Message negative content={Translate.string('No invitation recipients found.')} />
       )}
       {includesContacts && (data.contactListOptions.length > 0 || showNoContactsError) && (
