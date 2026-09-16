@@ -9,6 +9,7 @@
 
 
 from dataclasses import dataclass
+from enum import Enum, auto
 
 from flask import jsonify, session
 from marshmallow import ValidationError, fields, validate, validates_schema
@@ -180,9 +181,14 @@ class InviteByAffiliationArgs(InviteUsersArgs):
     affiliations = fields.Dict(load_default=dict)
 
 
+class AffiliationCatalogRecipientSource(Enum):
+    focal_points = auto()
+    contacts = auto()
+    both = auto()
+
+
 class AffiliationCatalogRecipientSelectionArgs(mm.Schema):
-    include_focal_points = fields.Boolean(required=True)
-    include_contacts = fields.Boolean(required=True)
+    recipient_source = fields.Enum(AffiliationCatalogRecipientSource, required=True)
     contact_lists = fields.List(fields.String(validate=not_empty), required=True)
     include_unnamed_lists = fields.Boolean(required=True)
 
@@ -190,9 +196,16 @@ class AffiliationCatalogRecipientSelectionArgs(mm.Schema):
 class InviteAffiliationCatalogArgs(InviteUsersArgs, AffiliationCatalogRecipientSelectionArgs):
     @validates_schema
     def _validate_recipient_source(self, data, **kwargs):
-        include_contacts = data['include_contacts'] and (data['contact_lists'] or data['include_unnamed_lists'])
-        if not data['include_focal_points'] and not include_contacts:
-            raise ValidationError('At least one recipient source is required')
+        if (
+            data['recipient_source']
+            in {
+                AffiliationCatalogRecipientSource.contacts,
+                AffiliationCatalogRecipientSource.both,
+            }
+            and not data['contact_lists']
+            and not data['include_unnamed_lists']
+        ):
+            raise ValidationError('At least one contact list is required')
 
 
 @dataclass(frozen=True)
@@ -203,11 +216,18 @@ class InvitationRecipient:
     affiliation: str
 
 
-def _get_affiliation_catalog_invitation_recipients(
-    event, *, include_focal_points, include_contacts, contact_lists, include_unnamed_lists
-):
+def _get_affiliation_catalog_invitation_recipients(event, *, recipient_source, contact_lists, include_unnamed_lists):
     affiliation_ids = get_event_catalog_affiliation_ids(event)
     recipients = {}
+    contact_recipient_emails = set()
+    include_focal_points = recipient_source in {
+        AffiliationCatalogRecipientSource.focal_points,
+        AffiliationCatalogRecipientSource.both,
+    }
+    include_contacts = recipient_source in {
+        AffiliationCatalogRecipientSource.contacts,
+        AffiliationCatalogRecipientSource.both,
+    }
 
     if not include_contacts:
         contact_lists = []
@@ -249,6 +269,7 @@ def _get_affiliation_catalog_invitation_recipients(
         for email in contact_list.emails:
             email = email.strip().lower()
             if validate_email(email):
+                contact_recipient_emails.add(email)
                 recipient = recipients.get(email)
                 if recipient is None:
                     recipients[email] = InvitationRecipient(
@@ -281,7 +302,7 @@ def _get_affiliation_catalog_invitation_recipients(
                 affiliation=user.affiliation or '',
             )
 
-    return list(recipients.values())
+    return list(recipients.values()), len(contact_recipient_emails)
 
 
 class RHInviteUsersBase(RHManageRegFormBase):
@@ -440,15 +461,14 @@ class RHAffiliationCatalogInviteRecipientCount(RHManageRegFormBase):
     """Return the number of unique recipients for an affiliation-catalog selection."""
 
     @use_kwargs(AffiliationCatalogRecipientSelectionArgs)
-    def _process(self, include_focal_points, include_contacts, contact_lists, include_unnamed_lists):
-        recipients = _get_affiliation_catalog_invitation_recipients(
+    def _process(self, recipient_source, contact_lists, include_unnamed_lists):
+        recipients, contact_recipient_count = _get_affiliation_catalog_invitation_recipients(
             self.event,
-            include_focal_points=include_focal_points,
-            include_contacts=include_contacts,
+            recipient_source=recipient_source,
             contact_lists=contact_lists,
             include_unnamed_lists=include_unnamed_lists,
         )
-        return jsonify(recipient_count=len(recipients))
+        return jsonify(recipient_count=len(recipients), contact_recipient_count=contact_recipient_count)
 
 
 class RHInviteAffiliationCatalog(RHInviteUsersBase):
@@ -465,19 +485,21 @@ class RHInviteAffiliationCatalog(RHInviteUsersBase):
         skip_moderation,
         skip_access_check,
         lock_email,
-        include_focal_points,
-        include_contacts,
+        recipient_source,
         contact_lists,
         include_unnamed_lists,
     ):
-        recipients = _get_affiliation_catalog_invitation_recipients(
+        recipients, _contact_recipient_count = _get_affiliation_catalog_invitation_recipients(
             self.event,
-            include_focal_points=include_focal_points,
-            include_contacts=include_contacts,
+            recipient_source=recipient_source,
             contact_lists=contact_lists,
             include_unnamed_lists=include_unnamed_lists,
         )
         recipients.sort(key=lambda recipient: (recipient.last_name, recipient.first_name, recipient.email))
+        include_contacts = recipient_source in {
+            AffiliationCatalogRecipientSource.contacts,
+            AffiliationCatalogRecipientSource.both,
+        }
         return self._invite_recipients(
             recipients,
             sender_address,
@@ -490,9 +512,8 @@ class RHInviteAffiliationCatalog(RHInviteUsersBase):
             lock_email,
             audit_log_data={
                 'Invitation mode': 'Affiliation catalog',
-                'Include contacts': include_contacts,
+                'Recipient source': recipient_source.name,
                 'Contact lists': sorted(contact_lists) if include_contacts else [],
                 'Include unnamed contact lists': include_contacts and include_unnamed_lists,
-                'Include focal points': include_focal_points,
             },
         )

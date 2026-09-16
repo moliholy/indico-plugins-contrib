@@ -20,12 +20,10 @@ export default function ContactListRecipientFields({
   contactListOptions,
   allowNoContactLists = false,
   hasUnnamedContactLists = true,
-  disabled = false,
 }: {
   contactListOptions: string[];
   allowNoContactLists?: boolean;
   hasUnnamedContactLists?: boolean;
-  disabled?: boolean;
 }) {
   const form = useForm<ContactListRecipientFormValues>();
   return (
@@ -39,7 +37,7 @@ export default function ContactListRecipientFields({
             : Translate.string('Send to all contact lists')
         }
         options={contactListOptions.map(name => ({value: name, text: name}))}
-        disabled={disabled || !contactListOptions.length}
+        disabled={!contactListOptions.length}
         onChange={(value: string[]) => {
           if (!allowNoContactLists && value.length === 0) {
             form.change('include_unnamed_lists', true);
@@ -56,7 +54,6 @@ export default function ContactListRecipientFields({
             label={Translate.string('Send to contacts in unnamed lists')}
             value={undefined}
             disabled={
-              disabled ||
               !hasUnnamedContactLists ||
               !contactListOptions.length ||
               (!allowNoContactLists && !contactLists.length)
