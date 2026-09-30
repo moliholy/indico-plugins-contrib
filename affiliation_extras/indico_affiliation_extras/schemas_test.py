@@ -84,3 +84,23 @@ def test_catalog_rejects_duplicate_list_names(schemas, db):
                 {'id': None, 'name': 'members', 'position': 2, 'affiliations': [affiliation.id]},
             ],
         })
+
+
+def test_catalog_list_keeps_plugin_data(schemas, db):
+    affiliation = Affiliation(name='CERN')
+    db.session.add(affiliation)
+    db.session.flush()
+    data = schemas.AffiliationCatalogArgs().load({
+        'name': 'Catalog',
+        'lists': [
+            {
+                'id': None,
+                'name': 'Members',
+                'position': 1,
+                'affiliations': [affiliation.id],
+                'plugin_data': {'key': 'value'},
+            },
+            {'id': None, 'name': 'Observers', 'position': 2, 'affiliations': [affiliation.id]},
+        ],
+    })
+    assert [lst.get('plugin_data') for lst in data['lists']] == [{'key': 'value'}, {}]

@@ -28,6 +28,7 @@ from indico.modules.users.models.affiliations import Affiliation
 from indico.modules.users.models.users import User
 from indico.util.signing import secure_serializer
 
+from indico_affiliation_extras import signals
 from indico_affiliation_extras.models.catalogs import AffiliationCatalog
 from indico_affiliation_extras.models.contacts import AffiliationContactList
 from indico_affiliation_extras.models.groups import AffiliationGroup
@@ -259,9 +260,10 @@ def _has_catalog_list_log_value(value: object) -> bool:
     return value not in (None, '')
 
 
-def _apply_catalog_lists(catalog: AffiliationCatalog, catalog_lists: list[dict]) -> None:
+def _apply_catalog_lists(catalog: AffiliationCatalog, catalog_lists: list[dict]) -> list[tuple[AffiliationList, dict]]:
     existing_by_id = {item.id: item for item in catalog.lists}
     touched_ids = set()
+    saved_lists = []
 
     for list_data in catalog_lists:
         list_obj = list_data.get('list_link')
@@ -278,11 +280,13 @@ def _apply_catalog_lists(catalog: AffiliationCatalog, catalog_lists: list[dict])
         list_obj.groups = list_data['groups']
         list_obj.tags = list_data['tags']
         list_obj.affiliations = list_data['affiliations']
+        saved_lists.append((list_obj, list_data))
 
     for list_id, list_obj in existing_by_id.items():
         if list_id not in touched_ids:
             catalog.lists.remove(list_obj)
             db.session.delete(list_obj)
+    return saved_lists
 
 
 def _get_catalog_list_changes(old_lists: dict[int, dict], new_lists: dict[int, dict]) -> tuple[_Changes, _LogFields]:
@@ -316,8 +320,12 @@ def _get_catalog_list_changes(old_lists: dict[int, dict], new_lists: dict[int, d
 
 def populate_catalog_lists(catalog: AffiliationCatalog, catalog_lists: list[dict]) -> tuple[_Changes, _LogFields]:
     old_lists = serialize_catalog_lists(catalog.lists)
-    _apply_catalog_lists(catalog, catalog_lists)
+    saved_lists = _apply_catalog_lists(catalog, catalog_lists)
     db.session.flush()
+    for list_obj, list_data in saved_lists:
+        signals.affiliation_list_saved.send(
+            list_obj, plugin_data=list_data.get('plugin_data', {}), source=list_data.get('source')
+        )
     new_lists = serialize_catalog_lists(catalog.lists)
     return _get_catalog_list_changes(old_lists, new_lists)
 

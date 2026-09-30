@@ -14,7 +14,7 @@ from indico.core.errors import UserValueError
 from indico.modules.categories.models.categories import Category
 from indico.modules.users.models.affiliations import Affiliation
 
-from indico_affiliation_extras import util
+from indico_affiliation_extras import signals, util
 from indico_affiliation_extras.models.catalogs import AffiliationCatalog
 from indico_affiliation_extras.models.contacts import AffiliationContactList
 from indico_affiliation_extras.models.groups import AffiliationGroup
@@ -180,6 +180,7 @@ def _catalog_list_payload(
     groups=(),
     tags=(),
     affiliations=(),
+    plugin_data=None,
 ):
     return {
         'list_link': list_link,
@@ -189,6 +190,7 @@ def _catalog_list_payload(
         'groups': set(groups),
         'tags': set(tags),
         'affiliations': set(affiliations),
+        'plugin_data': plugin_data or {},
     }
 
 
@@ -675,6 +677,33 @@ def test_populate_catalog_lists_rejects_list_from_other_catalog(db):
                 _catalog_list_payload(list_link=foreign_list, name='Representatives', affiliations={affiliation}),
             ],
         )
+
+
+def test_populate_catalog_lists_sends_list_saved_signal(db):
+    catalog = _create_catalog(db, name='Catalog')
+    affiliation = _create_affiliation(db, 'CERN')
+    list_obj = _create_catalog_list(db, catalog, name='Existing', affiliations={affiliation})
+    calls = []
+
+    def _on_list_saved(sender, **kwargs):
+        calls.append((sender, sender.id, kwargs))
+
+    with signals.affiliation_list_saved.connected_to(_on_list_saved):
+        util.populate_catalog_lists(
+            catalog,
+            [
+                _catalog_list_payload(
+                    list_link=list_obj, name='Existing', affiliations={affiliation}, plugin_data={'key': 'value'}
+                ),
+                _catalog_list_payload(name='New', position=2, affiliations={affiliation}),
+            ],
+        )
+
+    new_list = next(lst for lst in catalog.lists if lst.name == 'New')
+    assert calls == [
+        (list_obj, list_obj.id, {'plugin_data': {'key': 'value'}, 'source': None}),
+        (new_list, new_list.id, {'plugin_data': {}, 'source': None}),
+    ]
 
 
 def test_get_inherited_catalogs_on_event_excludes_own_catalogs(db, create_category, create_event):

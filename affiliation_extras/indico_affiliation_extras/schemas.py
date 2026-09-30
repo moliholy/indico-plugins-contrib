@@ -162,6 +162,7 @@ class AffiliationCatalogListArgs(mm.Schema):
     groups = ModelList(AffiliationGroup, collection_class=set, filter_deleted=True, load_default=set)
     tags = ModelList(AffiliationTag, collection_class=set, load_default=set)
     affiliations = ModelList(Affiliation, collection_class=set, filter_deleted=True, load_default=set)
+    plugin_data = fields.Dict(load_default=dict)
 
     @validates_schema
     def _validate_members(self, data, **kwargs):

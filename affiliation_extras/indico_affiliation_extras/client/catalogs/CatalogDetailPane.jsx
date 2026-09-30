@@ -33,6 +33,7 @@ export default function CatalogDetailPane({catalog, targetLocator, isNew, onSubm
       groups: list.groups,
       tags: list.tags,
       affiliations: list.affiliations,
+      plugin_data: list.plugin_data,
     })),
   };
 
@@ -55,6 +56,7 @@ export default function CatalogDetailPane({catalog, targetLocator, isNew, onSubm
         groups: list.groups.map(group => group.id),
         tags: list.tags.map(tag => tag.id),
         affiliations: list.affiliations.map(affiliation => affiliation.id),
+        plugin_data: list.plugin_data,
       })),
     });
 

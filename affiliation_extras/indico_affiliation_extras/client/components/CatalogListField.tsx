@@ -19,6 +19,7 @@ import {FinalField} from 'indico/react/forms';
 import {FinalModalForm} from 'indico/react/forms/final-form';
 import {Translate} from 'indico/react/i18n';
 import {SortableWrapper, useSortableItem} from 'indico/react/sortable';
+import {getPluginObjects} from 'indico/utils/plugins';
 import {Affiliation} from 'indico/modules/users/affiliations/types';
 
 import {GroupInfo, TagInfo} from '../types';
@@ -41,6 +42,21 @@ export interface CatalogItem {
   groups: GroupInfo[];
   tags: TagInfo[];
   affiliations: Affiliation[];
+  // values of the columns added by other plugins, keyed by column key
+  plugin_data?: Record<string, unknown>;
+}
+
+// Column that other plugins can add to the list editor via the
+// 'affiliation-catalog-list-columns' entry point. Its component edits
+// the value stored under `key` in the list's `plugin_data`.
+interface CatalogListColumn {
+  key: string;
+  label: string;
+  component: React.ComponentType<{value: unknown; onChange: (value: unknown) => void}>;
+}
+
+function getPluginColumns(): CatalogListColumn[] {
+  return getPluginObjects('affiliation-catalog-list-columns').flat();
 }
 
 const makeDefaultList = (): CatalogItem => ({
@@ -62,6 +78,7 @@ interface CatalogListRowProps {
   tagsURL: string;
   searchURL: string;
   countriesURL: string;
+  pluginColumns: CatalogListColumn[];
   onChange: (value: CatalogItem) => void;
   onDelete: () => void;
   onMove: (sourceIndex: number, targetIndex: number) => void;
@@ -76,6 +93,7 @@ function CatalogListRow({
   tagsURL,
   searchURL,
   countriesURL,
+  pluginColumns,
   onChange,
   onDelete,
   onMove,
@@ -116,6 +134,16 @@ function CatalogListRow({
       <td>
         <MembersDisplay groups={value.groups} tags={value.tags} affiliations={value.affiliations} />
       </td>
+      {pluginColumns.map(({key, component: Component}) => (
+        <td key={key}>
+          <Component
+            value={value.plugin_data?.[key]}
+            onChange={newValue =>
+              onChange({...value, plugin_data: {...value.plugin_data, [key]: newValue}})
+            }
+          />
+        </td>
+      ))}
       <td style={{whiteSpace: 'nowrap', width: '1px'}}>
         <Popup
           content={Translate.string('Edit members')}
@@ -246,6 +274,7 @@ function CatalogListField({
   targetLocator: Record<string, number>;
 }) {
   const emptyDefault = useMemo(makeDefaultList, []);
+  const pluginColumns = getPluginColumns();
   const values = _value?.length ? _value : [emptyDefault];
   const normalizePositions = (items: CatalogItem[]) =>
     items.map((item, idx) => ({
@@ -278,6 +307,7 @@ function CatalogListField({
               <col styleName="col-drag" />
               <col styleName="col-name" />
               <col styleName="col-members" />
+              {pluginColumns.map(({key}) => <col key={key} />)}
               <col styleName="col-actions" />
             </colgroup>
             <thead>
@@ -289,6 +319,7 @@ function CatalogListField({
                 <th>
                   <Translate>Members</Translate>
                 </th>
+                {pluginColumns.map(({key, label}) => <th key={key}>{label}</th>)}
                 <th />
               </tr>
             </thead>
@@ -303,6 +334,7 @@ function CatalogListField({
                   tagsURL={affiliationTagsURL(targetLocator)}
                   searchURL={searchAffiliationsURL(targetLocator)}
                   countriesURL={affiliationCountriesURL(targetLocator)}
+                  pluginColumns={pluginColumns}
                   canDelete={normalizedValues.length > 1}
                   onChange={newValue =>
                     handleChange(normalizedValues.map((v, i) => (i === idx ? newValue : v)))

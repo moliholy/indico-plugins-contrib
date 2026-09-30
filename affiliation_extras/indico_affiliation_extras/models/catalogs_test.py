@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 
 from indico.modules.users.models.affiliations import Affiliation
 
+from indico_affiliation_extras import signals
 from indico_affiliation_extras.models.catalogs import AffiliationCatalog
 from indico_affiliation_extras.models.lists import AffiliationList
 from indico_affiliation_extras.settings import event_settings
@@ -146,6 +147,29 @@ def test_event_catalog_api_crud_clone_and_toggle_default(test_client, db, dummy_
     event_log_entries = event.log_entries.filter_by(module='Affiliation Catalogs').all()
     assert len(event_log_entries) == 4
     assert {entry.meta.get('affiliation_catalog_id') for entry in event_log_entries} == {created_id, clone_id}
+
+
+@pytest.mark.usefixtures('no_csrf_check')
+def test_event_catalog_clone_sends_list_saved_signal_with_source(
+    test_client, db, dummy_user, create_category, create_event
+):
+    category = create_category(title='Category')
+    event = create_event(category=category)
+    event.update_principal(dummy_user, full_access=True)
+    affiliation = _create_affiliation(db)
+    catalog = _create_catalog(db, affiliation, category=category, name='Inherited catalog')
+    _login(test_client, dummy_user)
+    calls = []
+
+    def _on_list_saved(sender, **kwargs):
+        calls.append((sender, kwargs))
+
+    with signals.affiliation_list_saved.connected_to(_on_list_saved):
+        resp = test_client.post(f'/event/{event.id}/manage/affiliations/api/affiliations/catalogs/{catalog.id}/clone')
+
+    assert resp.status_code == 200
+    clone = db.session.get(AffiliationCatalog, resp.json['id'])
+    assert calls == [(clone.lists[0], {'plugin_data': {}, 'source': catalog.lists[0]})]
 
 
 @pytest.mark.usefixtures('no_csrf_check')

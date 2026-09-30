@@ -248,6 +248,7 @@ class RHCloneAffiliationCatalog(RHAffiliationCatalogMixin, RHAffiliationCatalogs
                 'groups': lst.groups,
                 'tags': lst.tags,
                 'affiliations': lst.affiliations,
+                'source': lst,
             }
             for lst in self.catalog.lists
         ]
