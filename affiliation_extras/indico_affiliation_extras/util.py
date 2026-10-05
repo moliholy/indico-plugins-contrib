@@ -529,7 +529,7 @@ def get_contact_list_names() -> list[str]:
     names = (
         db.session
         .query(AffiliationContactList.name)
-        .filter(AffiliationContactList.name != '')  # noqa: PLC1901
+        .filter(AffiliationContactList.name != '')  # ruff: ignore[compare-to-empty-string]
         .group_by(AffiliationContactList.name)
         .order_by(db.func.indico.indico_unaccent(db.func.lower(AffiliationContactList.name)))
     )
