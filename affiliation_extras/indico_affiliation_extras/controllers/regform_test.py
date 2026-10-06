@@ -57,6 +57,13 @@ def _add_event_catalog(db, event, affiliations):
 
 
 class TestInvitations:
+    @pytest.mark.parametrize(('profile_affiliation', 'multiple_affiliations', 'expected_affiliation'), (
+        ('', False, 'CERN'),
+        ('WIPO', False, 'WIPO'),
+        ('', True, ''),
+        ('WIPO', True, 'WIPO'),
+    ))
+    @pytest.mark.parametrize('recipient_source', ('focal_points', 'both'))
     @pytest.mark.usefixtures('no_csrf_check')
     def test_invite_affiliation_catalog_focal_points(
         self,
@@ -67,6 +74,10 @@ class TestInvitations:
         create_user,
         create_event_catalog,
         monkeypatch,
+        profile_affiliation,
+        multiple_affiliations,
+        expected_affiliation,
+        recipient_source,
     ):
         monkeypatch.setattr('indico.modules.events.registration.util.notify_invitation', lambda *args, **kwargs: None)
         dummy_regform.event.update_principal(dummy_user, full_access=True)
@@ -82,7 +93,14 @@ class TestInvitations:
         outside = create_user(2, first_name='Bob', last_name='Other', email='bob@example.test')
         set_focal_points(managed, {focal})
         set_focal_points(other, {outside})
-        db.session.add(AffiliationContactList(affiliation=managed, name='Operations', emails=['contact@example.test']))
+        focal.affiliation = profile_affiliation
+        if multiple_affiliations:
+            additional = Affiliation(name='WIPO')
+            db.session.add(additional)
+            db.session.flush()
+            create_event_catalog(dummy_regform.event, {managed, additional})
+            set_focal_points(additional, {focal})
+        db.session.add(AffiliationContactList(affiliation=managed, name='Operations', emails=[focal.email]))
         db.session.flush()
 
         resp = test_client.post(
@@ -96,7 +114,7 @@ class TestInvitations:
                 'skip_moderation': False,
                 'skip_access_check': False,
                 'lock_email': False,
-                'recipient_source': 'focal_points',
+                'recipient_source': recipient_source,
                 'contact_lists': ['Operations'],
                 'include_unnamed_lists': False,
             },
@@ -106,9 +124,10 @@ class TestInvitations:
         assert resp.json['sent'] == 1
         assert resp.json['skipped'] == 0
         assert [inv.email for inv in dummy_regform.invitations] == ['alice@example.test']
+        assert dummy_regform.invitations[0].affiliation == expected_affiliation
         log_entry = dummy_regform.event.log_entries.filter_by(module='Registration').one()
-        assert log_entry.data['Recipient source'] == 'focal_points'
-        assert log_entry.data['Contact lists'] == []
+        assert log_entry.data['Recipient source'] == recipient_source
+        assert log_entry.data['Contact lists'] == (['Operations'] if recipient_source == 'both' else [])
         assert log_entry.data['Include unnamed contact lists'] is False
 
     @pytest.mark.usefixtures('no_csrf_check')
@@ -166,6 +185,7 @@ class TestInvitations:
         assert log_entry.data['Contact lists'] == ['Operations']
         assert log_entry.data['Include unnamed contact lists'] is True
 
+    @pytest.mark.parametrize(('profile_affiliation', 'expected_affiliation'), (('', 'CERN'), ('WIPO', 'WIPO')))
     @pytest.mark.usefixtures('no_csrf_check')
     def test_invite_affiliation_catalog_uses_matching_user_data(
         self,
@@ -175,6 +195,8 @@ class TestInvitations:
         dummy_user,
         create_user,
         monkeypatch,
+        profile_affiliation,
+        expected_affiliation,
     ):
         monkeypatch.setattr('indico.modules.events.registration.util.notify_invitation', lambda *args, **kwargs: None)
         dummy_regform.event.update_principal(dummy_user, full_access=True)
@@ -185,7 +207,7 @@ class TestInvitations:
         db.session.flush()
         _add_event_catalog(db, dummy_regform.event, {managed})
         contact_user = create_user(1, first_name='Alice', last_name='Contact', email='contact@example.test')
-        contact_user.affiliation = 'WIPO'
+        contact_user.affiliation = profile_affiliation
         db.session.add(AffiliationContactList(affiliation=managed, name='Operations', emails=['contact@example.test']))
         db.session.flush()
 
@@ -203,7 +225,9 @@ class TestInvitations:
 
         assert resp.status_code == 200
         (invitation,) = dummy_regform.invitations
-        assert (invitation.first_name, invitation.last_name, invitation.affiliation) == ('Alice', 'Contact', 'WIPO')
+        assert (invitation.first_name, invitation.last_name, invitation.affiliation) == (
+            'Alice', 'Contact', expected_affiliation
+        )
 
     @pytest.mark.usefixtures('no_csrf_check')
     def test_invite_affiliation_catalog_omits_ambiguous_affiliation(
@@ -543,4 +567,4 @@ class TestInvitations:
         )
 
         assert resp.status_code == 422
-        assert '_schema' in resp.json['webargs_errors']
+        assert resp.json['webargs_errors'] == {'contact_lists': ['At least one contact list is required']}

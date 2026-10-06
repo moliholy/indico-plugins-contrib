@@ -18,10 +18,12 @@ interface ContactListRecipientFormValues {
 
 export default function ContactListRecipientFields({
   contactListOptions,
+  label = Translate.string('Recipients'),
   allowNoContactLists = false,
   hasUnnamedContactLists = true,
 }: {
   contactListOptions: string[];
+  label?: string;
   allowNoContactLists?: boolean;
   hasUnnamedContactLists?: boolean;
 }) {
@@ -30,7 +32,7 @@ export default function ContactListRecipientFields({
     <>
       <FinalDropdown
         name="contact_lists"
-        label={Translate.string('Recipients')}
+        label={label}
         placeholder={
           allowNoContactLists
             ? Translate.string('Select contact lists')
@@ -52,7 +54,6 @@ export default function ContactListRecipientFields({
           <FinalCheckbox
             name="include_unnamed_lists"
             label={Translate.string('Send to contacts in unnamed lists')}
-            value={undefined}
             disabled={
               !hasUnnamedContactLists ||
               !contactListOptions.length ||

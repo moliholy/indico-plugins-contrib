@@ -34,7 +34,6 @@ from indico.modules.users.models.emails import UserEmail
 from indico.modules.users.models.users import User
 from indico.modules.users.util import SearchAffiliationsMixin
 from indico.util.marshmallow import LowercaseString, ModelField, no_relative_urls, not_empty
-from indico.util.string import validate_email
 from indico.web.args import use_kwargs
 
 from indico_affiliation_extras.controllers.base import (
@@ -205,7 +204,7 @@ class InviteAffiliationCatalogArgs(InviteUsersArgs, AffiliationCatalogRecipientS
             and not data['contact_lists']
             and not data['include_unnamed_lists']
         ):
-            raise ValidationError('At least one contact list is required')
+            raise ValidationError('At least one contact list is required', field_name='contact_lists')
 
 
 @dataclass(frozen=True)
@@ -237,11 +236,17 @@ def _get_affiliation_catalog_invitation_recipients(event, *, recipient_source, c
         for user in get_event_catalog_focal_points(event, affiliation_ids):
             if not user.email:
                 continue
+            focal_affiliations = {
+                entry.affiliation.name
+                for entry in user.focal_point_entries
+                if entry.affiliation_id in affiliation_ids
+            }
+            fallback_affiliation = next(iter(focal_affiliations)) if len(focal_affiliations) == 1 else ''
             recipients[user.email.lower()] = InvitationRecipient(
                 first_name=user.first_name,
                 last_name=user.last_name,
                 email=user.email,
-                affiliation=user.affiliation or '',
+                affiliation=user.affiliation or fallback_affiliation,
             )
     focal_point_emails = set(recipients)
 
@@ -249,7 +254,7 @@ def _get_affiliation_catalog_invitation_recipients(event, *, recipient_source, c
     if contact_lists:
         list_filters.append(AffiliationContactList.name.in_(contact_lists))
     if include_unnamed_lists:
-        list_filters.append(AffiliationContactList.name == '')  # ruff: ignore[compare-to-empty-string]
+        list_filters.append(AffiliationContactList.name == '')  # noqa: PLC1901
     lists = []
     if list_filters and affiliation_ids:
         lists = (
@@ -267,24 +272,22 @@ def _get_affiliation_catalog_invitation_recipients(event, *, recipient_source, c
 
     for contact_list in lists:
         for email in contact_list.emails:
-            email = email.strip().lower()
-            if validate_email(email):
-                contact_recipient_emails.add(email)
-                recipient = recipients.get(email)
-                if recipient is None:
-                    recipients[email] = InvitationRecipient(
-                        first_name='',
-                        last_name='',
-                        email=email,
-                        affiliation=contact_list.affiliation.name,
-                    )
-                elif email not in focal_point_emails and recipient.affiliation != contact_list.affiliation.name:
-                    recipients[email] = InvitationRecipient(
-                        first_name='',
-                        last_name='',
-                        email=email,
-                        affiliation='',
-                    )
+            contact_recipient_emails.add(email)
+            recipient = recipients.get(email)
+            if recipient is None:
+                recipients[email] = InvitationRecipient(
+                    first_name='',
+                    last_name='',
+                    email=email,
+                    affiliation=contact_list.affiliation.name,
+                )
+            elif email not in focal_point_emails and recipient.affiliation != contact_list.affiliation.name:
+                recipients[email] = InvitationRecipient(
+                    first_name='',
+                    last_name='',
+                    email=email,
+                    affiliation='',
+                )
 
     contact_emails = set(recipients) - focal_point_emails
     if contact_emails:
@@ -299,7 +302,7 @@ def _get_affiliation_catalog_invitation_recipients(event, *, recipient_source, c
                 first_name=user.first_name,
                 last_name=user.last_name,
                 email=user_email.email,
-                affiliation=user.affiliation or '',
+                affiliation=user.affiliation or recipients[user_email.email].affiliation,
             )
 
     return list(recipients.values()), len(contact_recipient_emails)
@@ -347,26 +350,25 @@ class RHInviteUsersBase(RHManageRegFormBase):
                 copy_for_sender=copy_for_sender,
             )
 
-        if audit_log_data is not None:
-            self.regform.log(
-                EventLogRealm.management,
-                LogKind.other,
-                'Registration',
-                'Invitations sent',
-                session.user,
-                data={
-                    'Sender': sender_address,
-                    'BCC addresses': bcc_addresses,
-                    'CC to sender': copy_for_sender,
-                    'Subject': subject,
-                    'Body': body,
-                    'Skip moderation': skip_moderation,
-                    'Skip access check': skip_access_check,
-                    'Lock email': lock_email,
-                    **audit_log_data,
-                    '_html_fields': ['Body'],
-                },
-            )
+        self.regform.log(
+            EventLogRealm.management,
+            LogKind.other,
+            'Registration',
+            'Invitations sent',
+            session.user,
+            data={
+                'Sender': sender_address,
+                'BCC addresses': bcc_addresses,
+                'CC to sender': copy_for_sender,
+                'Subject': subject,
+                'Body': body,
+                'Skip moderation': skip_moderation,
+                'Skip access check': skip_access_check,
+                'Lock email': lock_email,
+                **(audit_log_data or {}),
+                '_html_fields': ['Body'],
+            },
+        )
 
         invitations = (
             RegistrationInvitation.query

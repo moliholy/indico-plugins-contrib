@@ -99,7 +99,6 @@ const AffiliationCatalogFields = ({eventId, regformId}: AffiliationCatalogFields
   } = useIndicoAxios(recipientCountConfig, {camelize: true, manual: !recipientSource});
   const recipientCountData = recipientCountResponse as RecipientCountData | null;
   const previousRecipientCountConfig = useRef(recipientCountConfig);
-  const ignoredRecipientCountData = useRef<RecipientCountData | null>(null);
   const recipientCountConfigChanged = previousRecipientCountConfig.current !== recipientCountConfig;
   const hasUnnamedContactLists = data && data.hasUnnamedContactLists;
   const hasContactLists = !!(
@@ -130,25 +129,23 @@ const AffiliationCatalogFields = ({eventId, regformId}: AffiliationCatalogFields
     !recipientCountError &&
     !recipientCountConfigChanged &&
     recipientCountData &&
-    recipientCountData !== ignoredRecipientCountData.current &&
     recipientCountData.contactRecipientCount === 0
   );
 
   useEffect(() => {
     if (previousRecipientCountConfig.current !== recipientCountConfig) {
       previousRecipientCountConfig.current = recipientCountConfig;
-      ignoredRecipientCountData.current = recipientCountData;
       form.change('affiliation_catalog_recipient_count', 0);
     }
-  }, [form, recipientCountConfig, recipientCountData]);
+  }, [form, recipientCountConfig]);
 
   useEffect(() => {
     if (
       recipientSource &&
       !recipientCountLoading &&
       !recipientCountError &&
-      recipientCountData &&
-      recipientCountData !== ignoredRecipientCountData.current
+      !recipientCountConfigChanged &&
+      recipientCountData
     ) {
       form.change(
         'affiliation_catalog_recipient_count',
@@ -160,6 +157,7 @@ const AffiliationCatalogFields = ({eventId, regformId}: AffiliationCatalogFields
   }, [
     form,
     includesContacts,
+    recipientCountConfigChanged,
     recipientCountData,
     recipientCountError,
     recipientCountLoading,
@@ -242,6 +240,7 @@ const AffiliationCatalogFields = ({eventId, regformId}: AffiliationCatalogFields
         <Segment>
           {data.contactListOptions.length > 0 && (
             <ContactListRecipientFields
+              label={Translate.string('Contact lists')}
               contactListOptions={data.contactListOptions}
               hasUnnamedContactLists={data.hasUnnamedContactLists}
               allowNoContactLists
