@@ -5,13 +5,13 @@
 # redistribute them and/or modify them under the terms of the;
 # MIT License see the LICENSE file for more details.
 
-from collections import defaultdict
 from collections.abc import Collection, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Literal
 
 from marshmallow import ValidationError
+from sqlalchemy.orm import contains_eager, joinedload
 
 from indico.core.db import db
 from indico.modules.events.models.events import Event
@@ -38,11 +38,17 @@ class InvitationRecipient:
     email: str
     affiliation: str
     id: int | None = None
-    is_primary: bool = False
 
     @property
     def identity_key(self) -> _RecipientIdentity:
         return ('user', self.id) if self.id is not None else ('email', self.email.lower())
+
+
+@dataclass
+class _ContactRecipientGroup:
+    user: User | None
+    emails: set[str] = field(default_factory=set)
+    affiliations: set[str] = field(default_factory=set)
 
 
 def _get_catalog_contact_lists(
@@ -57,6 +63,7 @@ def _get_catalog_contact_lists(
     if filters and affiliation_ids:
         lists = (
             AffiliationContactList.query
+            .options(joinedload('affiliation'))
             .filter(AffiliationContactList.affiliation_id.in_(affiliation_ids), db.or_(*filters))
             .order_by(AffiliationContactList.affiliation_id, AffiliationContactList.id)
             .all()
@@ -84,38 +91,58 @@ def _get_focal_point_recipients(event: Event, affiliation_ids: set[int]) -> list
             email=user.email,
             affiliation=user.affiliation or fallback_affiliation,
             id=user.id,
-            is_primary=True,
         ))
     return recipients
 
 
-def _get_contact_recipients(contact_lists: Sequence[AffiliationContactList]) -> list[InvitationRecipient]:
-    affiliations_by_email: defaultdict[str, set[str]] = defaultdict(set)
-    for contact_list in contact_lists:
-        for email in contact_list.emails:
-            affiliations_by_email[email].add(contact_list.affiliation.name)
-    if not affiliations_by_email:
-        return []
+def _get_contact_users(contact_lists: Sequence[AffiliationContactList]) -> dict[str, User]:
+    emails = {email for contact_list in contact_lists for email in contact_list.emails}
+    if not emails:
+        return {}
 
-    users_by_email = {
+    return {
         user_email.email: user_email.user
-        for user_email in UserEmail.query.join(User, User.id == UserEmail.user_id).filter(
-            UserEmail.email.in_(affiliations_by_email),
+        for user_email in UserEmail.query.join(User, User.id == UserEmail.user_id).options(
+            contains_eager('user').joinedload('_primary_email'),
+        ).filter(
+            UserEmail.email.in_(emails),
             ~UserEmail.is_user_deleted,
             ~User.is_deleted,
         )
     }
+
+
+def _group_contact_recipients(
+    contact_lists: Sequence[AffiliationContactList], users_by_email: dict[str, User],
+) -> list[_ContactRecipientGroup]:
+    groups: dict[_RecipientIdentity, _ContactRecipientGroup] = {}
+    for contact_list in contact_lists:
+        for email in contact_list.emails:
+            user = users_by_email.get(email)
+            identity = ('user', user.id) if user else ('email', email.lower())
+            if identity not in groups:
+                groups[identity] = _ContactRecipientGroup(user)
+            group = groups[identity]
+            group.emails.add(email)
+            group.affiliations.add(contact_list.affiliation.name)
+    return list(groups.values())
+
+
+def _get_contact_recipients(contact_lists: Sequence[AffiliationContactList]) -> list[InvitationRecipient]:
+    users_by_email = _get_contact_users(contact_lists)
+    groups = _group_contact_recipients(contact_lists, users_by_email)
     recipients = []
-    for email, affiliations in affiliations_by_email.items():
-        user = users_by_email.get(email)
-        fallback_affiliation = next(iter(affiliations)) if len(affiliations) == 1 else ''
+    for group in groups:
+        user = group.user
+        primary_email = user.email.lower() if user else None
+        email = primary_email if primary_email in group.emails else min(group.emails, key=str.lower)
+        fallback_affiliation = next(iter(group.affiliations)) if len(group.affiliations) == 1 else ''
         recipients.append(InvitationRecipient(
             first_name=user.first_name if user else '',
             last_name=user.last_name if user else '',
             email=email,
             affiliation=(user.affiliation if user else '') or fallback_affiliation,
             id=user.id if user else None,
-            is_primary=user is not None and email == user.email.lower(),
         ))
     return recipients
 
@@ -126,7 +153,7 @@ def _combine_invitation_recipients(
     unique_recipients: dict[_RecipientIdentity, InvitationRecipient] = {}
     for recipient in sorted(focal_points, key=lambda recipient: recipient.email.lower()):
         unique_recipients.setdefault(recipient.identity_key, recipient)
-    for recipient in sorted(contacts, key=lambda recipient: (not recipient.is_primary, recipient.email.lower())):
+    for recipient in sorted(contacts, key=lambda recipient: recipient.email.lower()):
         unique_recipients.setdefault(recipient.identity_key, recipient)
     return list(unique_recipients.values())
 
@@ -148,3 +175,24 @@ def get_affiliation_catalog_invitation_recipients(
         lists = _get_catalog_contact_lists(affiliation_ids, contact_lists, include_unnamed_lists)
         contacts = _get_contact_recipients(lists)
     return _combine_invitation_recipients(focal_points, contacts)
+
+
+def filter_invitation_recipients(regform, recipients):
+    """Exclude recipients already invited or actively registered by email or user identity."""
+    invited = {inv.email.lower() for inv in regform.invitations}
+    invited_user_ids = {
+        user_id for user_id, in db.session.query(UserEmail.user_id).join(User).filter(
+            UserEmail.email.in_(invited),
+            ~UserEmail.is_user_deleted,
+            ~User.is_deleted,
+        ).distinct()
+    } if invited else set()
+    registrations = [r for r in regform.registrations if r.is_active]
+    registered = {r.email.lower() for r in registrations if r.email}
+    registered_user_ids = {r.user_id for r in registrations if r.user_id is not None}
+    existing = invited | registered
+    existing_user_ids = invited_user_ids | registered_user_ids
+    return [
+        r for r in recipients
+        if r.email and r.email.lower() not in existing and r.id not in existing_user_ids
+    ]

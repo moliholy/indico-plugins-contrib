@@ -41,6 +41,7 @@ from indico_affiliation_extras.controllers.compat import CountriesListMixin
 from indico_affiliation_extras.focal_points import get_event_catalog_affiliation_ids, get_event_catalog_focal_points
 from indico_affiliation_extras.invitations import (
     AffiliationCatalogRecipientSource,
+    filter_invitation_recipients,
     get_affiliation_catalog_invitation_recipients,
 )
 from indico_affiliation_extras.models.contacts import AffiliationContactList
@@ -223,15 +224,7 @@ class RHInviteUsersBase(RHManageRegFormBase):
             skip_moderation = False
 
         recipients = list(recipients)
-        invited = {inv.email.lower() for inv in self.regform.invitations}
-        registrations = [r for r in self.regform.registrations if r.is_active]
-        registered = {r.email.lower() for r in registrations if r.email}
-        registered_user_ids = {r.user_id for r in registrations if r.user_id is not None}
-        existing = invited | registered
-        recipients_to_invite = [
-            r for r in recipients
-            if r.email and r.email.lower() not in existing and r.id not in registered_user_ids
-        ]
+        recipients_to_invite = filter_invitation_recipients(self.regform, recipients)
         skipped = len(recipients) - len(recipients_to_invite)
 
         for recipient in recipients_to_invite:

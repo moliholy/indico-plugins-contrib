@@ -57,6 +57,46 @@ def _add_event_catalog(db, event, affiliations):
 
 
 class TestInvitations:
+    @pytest.mark.parametrize('first_source', ('contacts', 'focal_points'))
+    @pytest.mark.usefixtures('no_csrf_check')
+    def test_invite_catalog_skips_previously_invited_user(
+        self, test_client, db, dummy_regform, dummy_user, create_user, create_event_catalog,
+        monkeypatch, first_source,
+    ):
+        monkeypatch.setattr('indico.modules.events.registration.util.notify_invitation', lambda *args, **kwargs: None)
+        dummy_regform.event.update_principal(dummy_user, full_access=True)
+        _login(test_client, dummy_user)
+        managed = Affiliation(name='CERN')
+        db.session.add(managed)
+        db.session.flush()
+        create_event_catalog(dummy_regform.event, {managed})
+        contact = create_user(1, email='primary@example.test')
+        contact.secondary_emails.add('secondary@example.test')
+        set_focal_points(managed, {contact})
+        db.session.add(AffiliationContactList(
+            affiliation=managed, name='Operations', emails=['secondary@example.test'],
+        ))
+        db.session.flush()
+        data = {
+            'sender_address': dummy_user.email,
+            'subject': 'Invitation',
+            'body': 'Please register',
+            'contact_lists': ['Operations'],
+            'include_unnamed_lists': False,
+        }
+
+        first = test_client.post(_url(dummy_regform), json={**data, 'recipient_source': first_source})
+        assert first.status_code == 200
+        assert first.json['sent'] == 1
+        second_source = 'focal_points' if first_source == 'contacts' else 'contacts'
+        second = test_client.post(_url(dummy_regform), json={**data, 'recipient_source': second_source})
+
+        assert second.status_code == 200
+        assert second.json['sent'] == 0
+        assert second.json['skipped'] == 1
+        expected_email = 'secondary@example.test' if first_source == 'contacts' else contact.email
+        assert [inv.email for inv in dummy_regform.invitations] == [expected_email]
+
     @pytest.mark.parametrize('registered', (True, False))
     @pytest.mark.usefixtures('no_csrf_check')
     def test_invite_secondary_contact_address(
