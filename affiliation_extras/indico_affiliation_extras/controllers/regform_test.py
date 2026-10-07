@@ -13,10 +13,7 @@ from indico.modules.logs import LogKind
 from indico.modules.users.models.affiliations import Affiliation
 
 from indico_affiliation_extras.focal_points import set_focal_points
-from indico_affiliation_extras.models.catalogs import AffiliationCatalog
 from indico_affiliation_extras.models.contacts import AffiliationContactList
-from indico_affiliation_extras.models.lists import AffiliationList
-from indico_affiliation_extras.settings import event_settings
 
 
 pytest_plugins = 'indico.modules.events.registration.testing.fixtures'
@@ -43,17 +40,6 @@ def _metadata_url(regform):
 
 def _recipient_count_url(regform):
     return f'{_url(regform)}/recipient-count'
-
-
-def _add_event_catalog(db, event, affiliations):
-    catalog = AffiliationCatalog(name='Catalog', event=event)
-    db.session.add(catalog)
-    db.session.flush()
-    affiliation_list = AffiliationList(catalog=catalog, name='Representatives', position=1, is_enabled=True)
-    affiliation_list.affiliations.update(affiliations)
-    db.session.add(affiliation_list)
-    db.session.flush()
-    event_settings.set(event, 'default_catalog_id', catalog.id)
 
 
 class TestInvitations:
@@ -260,6 +246,7 @@ class TestInvitations:
         dummy_regform,
         dummy_user,
         monkeypatch,
+        create_event_catalog,
     ):
         monkeypatch.setattr('indico.modules.events.registration.util.notify_invitation', lambda *args, **kwargs: None)
         dummy_regform.event.update_principal(dummy_user, full_access=True)
@@ -269,7 +256,7 @@ class TestInvitations:
         outside = Affiliation(name='MIT')
         db.session.add_all((managed, outside))
         db.session.flush()
-        _add_event_catalog(db, dummy_regform.event, {managed})
+        create_event_catalog(dummy_regform.event, {managed})
         db.session.add_all((
             AffiliationContactList(affiliation=managed, name='Operations', emails=['ops@example.test']),
             AffiliationContactList(affiliation=managed, name='Empty', emails=[]),
@@ -320,6 +307,7 @@ class TestInvitations:
         monkeypatch,
         profile_affiliation,
         expected_affiliation,
+        create_event_catalog,
     ):
         monkeypatch.setattr('indico.modules.events.registration.util.notify_invitation', lambda *args, **kwargs: None)
         dummy_regform.event.update_principal(dummy_user, full_access=True)
@@ -328,7 +316,7 @@ class TestInvitations:
         managed = Affiliation(name='CERN')
         db.session.add(managed)
         db.session.flush()
-        _add_event_catalog(db, dummy_regform.event, {managed})
+        create_event_catalog(dummy_regform.event, {managed})
         contact_user = create_user(1, first_name='Alice', last_name='Contact', email='contact@example.test')
         contact_user.affiliation = profile_affiliation
         db.session.add(AffiliationContactList(affiliation=managed, name='Operations', emails=['contact@example.test']))
@@ -360,6 +348,7 @@ class TestInvitations:
         dummy_regform,
         dummy_user,
         monkeypatch,
+        create_event_catalog,
     ):
         monkeypatch.setattr('indico.modules.events.registration.util.notify_invitation', lambda *args, **kwargs: None)
         dummy_regform.event.update_principal(dummy_user, full_access=True)
@@ -369,7 +358,7 @@ class TestInvitations:
         wipo = Affiliation(name='WIPO')
         db.session.add_all((cern, wipo))
         db.session.flush()
-        _add_event_catalog(db, dummy_regform.event, {cern, wipo})
+        create_event_catalog(dummy_regform.event, {cern, wipo})
         db.session.add_all((
             AffiliationContactList(affiliation=cern, name='Operations', emails=['shared@example.test']),
             AffiliationContactList(affiliation=wipo, name='Operations', emails=['shared@example.test']),
@@ -563,6 +552,7 @@ class TestInvitations:
         dummy_regform,
         dummy_user,
         create_user,
+        create_event_catalog,
     ):
         dummy_regform.event.update_principal(dummy_user, full_access=True)
         _login(test_client, dummy_user)
@@ -570,7 +560,7 @@ class TestInvitations:
         managed = Affiliation(name='CERN')
         db.session.add(managed)
         db.session.flush()
-        _add_event_catalog(db, dummy_regform.event, {managed})
+        create_event_catalog(dummy_regform.event, {managed})
 
         focal_point = create_user(1, email='shared@example.test')
         set_focal_points(managed, {focal_point})
@@ -602,6 +592,7 @@ class TestInvitations:
         db,
         dummy_regform,
         dummy_user,
+        create_event_catalog,
     ):
         dummy_regform.event.update_principal(dummy_user, full_access=True)
         _login(test_client, dummy_user)
@@ -609,7 +600,7 @@ class TestInvitations:
         managed = Affiliation(name='CERN')
         db.session.add(managed)
         db.session.flush()
-        _add_event_catalog(db, dummy_regform.event, {managed})
+        create_event_catalog(dummy_regform.event, {managed})
         db.session.add(AffiliationContactList(affiliation=managed, name='Operations', emails=['ops@example.test']))
         db.session.flush()
 
@@ -653,6 +644,7 @@ class TestInvitations:
         db,
         dummy_regform,
         dummy_user,
+        create_event_catalog,
     ):
         dummy_regform.event.update_principal(dummy_user, full_access=True)
         _login(test_client, dummy_user)
@@ -660,7 +652,7 @@ class TestInvitations:
         managed = Affiliation(name='CERN')
         db.session.add(managed)
         db.session.flush()
-        _add_event_catalog(db, dummy_regform.event, {managed})
+        create_event_catalog(dummy_regform.event, {managed})
         db.session.add(AffiliationContactList(affiliation=managed, name='Operations', emails=['ops@example.test']))
         db.session.flush()
 
