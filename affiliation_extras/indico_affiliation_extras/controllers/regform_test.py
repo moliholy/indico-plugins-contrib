@@ -57,6 +57,88 @@ def _add_event_catalog(db, event, affiliations):
 
 
 class TestInvitations:
+    @pytest.mark.parametrize('registered', (True, False))
+    @pytest.mark.usefixtures('no_csrf_check')
+    def test_invite_secondary_contact_address(
+        self, test_client, db, dummy_regform, dummy_user, create_user, create_registration,
+        create_event_catalog, monkeypatch, registered,
+    ):
+        monkeypatch.setattr('indico.modules.events.registration.util.notify_invitation', lambda *args, **kwargs: None)
+        dummy_regform.event.update_principal(dummy_user, full_access=True)
+        _login(test_client, dummy_user)
+        managed = Affiliation(name='CERN')
+        db.session.add(managed)
+        db.session.flush()
+        create_event_catalog(dummy_regform.event, {managed})
+        contact = create_user(1, email='primary@example.test')
+        contact.secondary_emails.add('secondary@example.test')
+        if registered:
+            db.session.add(create_registration(contact, dummy_regform))
+        db.session.add(AffiliationContactList(
+            affiliation=managed, name='Operations', emails=['secondary@example.test'],
+        ))
+        db.session.flush()
+
+        resp = test_client.post(_url(dummy_regform), json={
+            'sender_address': dummy_user.email,
+            'subject': 'Invitation',
+            'body': 'Please register',
+            'recipient_source': 'contacts',
+            'contact_lists': ['Operations'],
+            'include_unnamed_lists': False,
+        })
+
+        assert resp.status_code == 200
+        assert resp.json['sent'] == (0 if registered else 1)
+        assert resp.json['skipped'] == (1 if registered else 0)
+        assert [inv.email for inv in dummy_regform.invitations] == ([] if registered else ['secondary@example.test'])
+
+    @pytest.mark.parametrize('recipient_source', ('contacts', 'both'))
+    @pytest.mark.parametrize('include_primary', (True, False))
+    @pytest.mark.usefixtures('no_csrf_check')
+    def test_invite_catalog_deduplicates_user_addresses(
+        self, test_client, db, dummy_regform, dummy_user, create_user, create_event_catalog,
+        monkeypatch, recipient_source, include_primary,
+    ):
+        monkeypatch.setattr('indico.modules.events.registration.util.notify_invitation', lambda *args, **kwargs: None)
+        dummy_regform.event.update_principal(dummy_user, full_access=True)
+        _login(test_client, dummy_user)
+        managed = Affiliation(name='CERN')
+        db.session.add(managed)
+        db.session.flush()
+        create_event_catalog(dummy_regform.event, {managed})
+        contact = create_user(1, email='primary@example.test')
+        contact.secondary_emails.add('secondary@example.test')
+        contact.secondary_emails.add('another@example.test')
+        set_focal_points(managed, {contact})
+        emails = ['secondary@example.test', 'another@example.test', 'unknown@example.test']
+        if include_primary:
+            emails.append(contact.email)
+        db.session.add(AffiliationContactList(affiliation=managed, name='Operations', emails=emails))
+        db.session.flush()
+        source = {
+            'recipient_source': recipient_source,
+            'contact_lists': ['Operations'],
+            'include_unnamed_lists': False,
+        }
+
+        count = test_client.post(_recipient_count_url(dummy_regform), json=source)
+        assert count.status_code == 200
+        assert count.json == {'recipient_count': 2}
+        resp = test_client.post(_url(dummy_regform), json={
+            **source,
+            'sender_address': dummy_user.email,
+            'subject': 'Invitation',
+            'body': 'Please register',
+        })
+        assert resp.status_code == 200
+        assert resp.json['sent'] == 2
+        assert resp.json['skipped'] == 0
+        expected_email = (
+            'primary@example.test' if include_primary or recipient_source == 'both' else 'another@example.test'
+        )
+        assert {inv.email for inv in dummy_regform.invitations} == {expected_email, 'unknown@example.test'}
+
     @pytest.mark.parametrize(('profile_affiliation', 'multiple_affiliations', 'expected_affiliation'), (
         ('', False, 'CERN'),
         ('WIPO', False, 'WIPO'),
@@ -150,6 +232,7 @@ class TestInvitations:
         _add_event_catalog(db, dummy_regform.event, {managed})
         db.session.add_all((
             AffiliationContactList(affiliation=managed, name='Operations', emails=['ops@example.test']),
+            AffiliationContactList(affiliation=managed, name='Empty', emails=[]),
             AffiliationContactList(affiliation=managed, name='', emails=['contact@example.test']),
             AffiliationContactList(affiliation=outside, name='Operations', emails=['outside@example.test']),
         ))
@@ -162,7 +245,7 @@ class TestInvitations:
                 'subject': 'Invitation',
                 'body': 'Please register',
                 'recipient_source': 'contacts',
-                'contact_lists': ['Operations'],
+                'contact_lists': ['Empty', 'Operations'],
                 'include_unnamed_lists': True,
             },
         )
@@ -182,7 +265,7 @@ class TestInvitations:
         assert log_entry.user == dummy_user
         assert log_entry.data['Invitation mode'] == 'Affiliation catalog'
         assert log_entry.data['Recipient source'] == 'contacts'
-        assert log_entry.data['Contact lists'] == ['Operations']
+        assert log_entry.data['Contact lists'] == ['Empty', 'Operations']
         assert log_entry.data['Include unnamed contact lists'] is True
 
     @pytest.mark.parametrize(('profile_affiliation', 'expected_affiliation'), (('', 'CERN'), ('WIPO', 'WIPO')))
@@ -363,6 +446,7 @@ class TestInvitations:
         assert resp.json['skipped'] == 0
         assert [inv.email for inv in dummy_regform.invitations] == ['alice@example.test']
 
+    @pytest.mark.parametrize('has_contacts', (True, False))
     def test_affiliation_catalog_invite_metadata(
         self,
         test_client,
@@ -371,21 +455,29 @@ class TestInvitations:
         dummy_user,
         create_user,
         create_event_catalog,
+        has_contacts,
     ):
         dummy_regform.event.update_principal(dummy_user, full_access=True)
         _login(test_client, dummy_user)
 
         managed = Affiliation(name='CERN')
+        additional = Affiliation(name='WIPO')
         unmanaged = Affiliation(name='MIT')
-        db.session.add_all([managed, unmanaged])
+        db.session.add_all([managed, additional, unmanaged])
         db.session.flush()
-        create_event_catalog(dummy_regform.event, {managed})
+        create_event_catalog(dummy_regform.event, {managed, additional})
 
         set_focal_points(managed, {create_user(1)})
         set_focal_points(unmanaged, {create_user(2)})
         db.session.add_all((
-            AffiliationContactList(affiliation=managed, name='Operations', emails=['ops@example.test']),
-            AffiliationContactList(affiliation=managed, name='', emails=['contact@example.test']),
+            AffiliationContactList(
+                affiliation=managed, name='Operations', emails=['ops@example.test'] if has_contacts else [],
+            ),
+            AffiliationContactList(
+                affiliation=managed, name='', emails=['contact@example.test'] if has_contacts else [],
+            ),
+            AffiliationContactList(affiliation=additional, name='Operations', emails=[]),
+            AffiliationContactList(affiliation=managed, name='Empty', emails=[]),
             AffiliationContactList(affiliation=unmanaged, name='Outside', emails=['outside@example.test']),
         ))
         db.session.flush()
@@ -394,11 +486,14 @@ class TestInvitations:
 
         assert resp.status_code == 200
         assert resp.json == {
-            'affiliation_count': 1,
-            'contact_list_options': ['Operations'],
+            'affiliation_count': 2,
+            'contact_list_options': [
+                {'name': '', 'has_contacts': has_contacts},
+                {'name': 'Empty', 'has_contacts': False},
+                {'name': 'Operations', 'has_contacts': has_contacts},
+            ],
             'focal_point_count': 1,
             'has_affiliation_catalog': True,
-            'has_unnamed_contact_lists': True,
         }
 
     def test_affiliation_catalog_invite_metadata_without_catalog(
@@ -418,7 +513,6 @@ class TestInvitations:
             'contact_list_options': [],
             'focal_point_count': 0,
             'has_affiliation_catalog': False,
-            'has_unnamed_contact_lists': False,
         }
 
     @pytest.mark.usefixtures('no_csrf_check')
@@ -459,7 +553,7 @@ class TestInvitations:
         )
 
         assert resp.status_code == 200
-        assert resp.json == {'contact_recipient_count': 2, 'recipient_count': 2}
+        assert resp.json == {'recipient_count': 2}
 
     @pytest.mark.usefixtures('no_csrf_check')
     def test_affiliation_catalog_invite_rejects_unknown_contact_list(
@@ -540,7 +634,7 @@ class TestInvitations:
         )
 
         assert resp.status_code == 200
-        assert resp.json == {'contact_recipient_count': 0, 'recipient_count': 0}
+        assert resp.json == {'recipient_count': 0}
 
     @pytest.mark.usefixtures('no_csrf_check')
     @pytest.mark.parametrize('recipient_source', ('contacts', 'both'))
@@ -568,3 +662,39 @@ class TestInvitations:
 
         assert resp.status_code == 422
         assert resp.json['webargs_errors'] == {'contact_lists': ['At least one contact list is required']}
+
+    @pytest.mark.usefixtures('no_csrf_check')
+    @pytest.mark.parametrize('recipient_source', ('contacts', 'both'))
+    @pytest.mark.parametrize('contact_list_name', ('Operations', '', None))
+    @pytest.mark.parametrize('count_only', (False, True))
+    def test_catalog_rejects_empty_contact_selection(
+        self, test_client, db, dummy_regform, dummy_user, create_user, create_event_catalog,
+        recipient_source, contact_list_name, count_only, monkeypatch,
+    ):
+        monkeypatch.setattr('indico.modules.events.registration.util.notify_invitation', lambda *args, **kwargs: None)
+        dummy_regform.event.update_principal(dummy_user, full_access=True)
+        _login(test_client, dummy_user)
+        managed = Affiliation(name='CERN')
+        db.session.add(managed)
+        db.session.flush()
+        create_event_catalog(dummy_regform.event, {managed})
+        set_focal_points(managed, {create_user(1)})
+        if contact_list_name is not None:
+            db.session.add(AffiliationContactList(affiliation=managed, name=contact_list_name, emails=[]))
+        db.session.flush()
+        data = {
+            'recipient_source': recipient_source,
+            'contact_lists': [contact_list_name] if contact_list_name else [],
+            'include_unnamed_lists': not contact_list_name,
+        }
+        if not count_only:
+            data.update(sender_address=dummy_user.email, subject='Invitation', body='Please register')
+
+        url = _recipient_count_url(dummy_regform) if count_only else _url(dummy_regform)
+        resp = test_client.post(url, json=data)
+
+        assert resp.status_code == 422
+        assert resp.json['webargs_errors'] == {
+            'contact_lists': ['No contacts match the selected contact lists.'],
+        }
+        assert not dummy_regform.invitations

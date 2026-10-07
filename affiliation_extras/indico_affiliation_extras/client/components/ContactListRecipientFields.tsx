@@ -56,8 +56,7 @@ export default function ContactListRecipientFields({
             label={Translate.string('Send to contacts in unnamed lists')}
             disabled={
               !hasUnnamedContactLists ||
-              !contactListOptions.length ||
-              (!allowNoContactLists && !contactLists.length)
+              (!allowNoContactLists && (!contactListOptions.length || !contactLists.length))
             }
             showAsToggle
           />
